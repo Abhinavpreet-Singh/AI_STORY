@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/quiz_question.dart';
 import '../utils/highlight_helper.dart';
+import '../utils/speech_text_mapper.dart';
 
 class QuizRepository {
   Future<QuizSet> loadQuizForStory(String storyId) async {
@@ -38,6 +39,7 @@ class ElevenLabsSpeech {
 class TtsService {
   TtsService() {
     _initNativeTts();
+    _configurePlayer();
     _player.onPlayerComplete.listen((_) => _onPlaybackFinished());
     _player.onPlayerStateChanged.listen((state) {
       if (state == PlayerState.completed) {
@@ -61,16 +63,41 @@ class TtsService {
   bool _usingNativeTts = false;
   bool _completionSent = false;
   List<double> _characterEndTimes = [];
-  String _spokenText = '';
+  String _displayText = '';
+  String _speechText = '';
+  SpeechTextMapper? _mapper;
   int _resumeCharIndex = 0;
   int _speakOffset = 0;
   int _lastEmittedStart = -1;
   int _lastEmittedEnd = -1;
 
-  int get resumeCharIndex => _resumeCharIndex;
+  /// Display-text position for saving resume points in the UI.
+  int get resumeCharIndex =>
+      _mapper?.toDisplayEnd(_resumeCharIndex) ?? _resumeCharIndex;
+
   bool get isPaused => _isPaused;
   bool get hasActiveSession =>
-      _spokenText.isNotEmpty && !_stoppedByUser && !_completionSent;
+      _speechText.isNotEmpty && !_stoppedByUser && !_completionSent;
+
+  static const _audioHighlightLeadMs = 160;
+
+  Future<void> _configurePlayer() async {
+    await _player.setAudioContext(
+      AudioContext(
+        android: AudioContextAndroid(
+          isSpeakerphoneOn: true,
+          stayAwake: true,
+          contentType: AndroidContentType.speech,
+          usageType: AndroidUsageType.media,
+          audioFocus: AndroidAudioFocus.gain,
+        ),
+        iOS: AudioContextIOS(
+          category: AVAudioSessionCategory.playback,
+        ),
+      ),
+    );
+    await _player.setVolume(1.0);
+  }
 
   /// Uses your female voice from `.env` → `ELEVENLABS_VOICE_ID`.
   String get voiceId => dotenv.env['ELEVENLABS_VOICE_ID']?.trim() ?? '';
@@ -97,7 +124,8 @@ class TtsService {
 
     _nativeTts.setProgressHandler((text, start, end, word) {
       if (_usingNativeTts) {
-        final absoluteEnd = (_speakOffset + end).clamp(0, _spokenText.length);
+        final absoluteEnd =
+            (_speakOffset + end).clamp(0, _speechText.length);
         _resumeCharIndex = absoluteEnd;
         _emitSyncedProgress(absoluteEnd);
       }
@@ -167,7 +195,7 @@ class TtsService {
 
   Future<void> _speakWithElevenLabs(String text, {int startIndex = 0}) async {
     final speech = await _fetchElevenLabsSpeech(text);
-    _spokenText = text;
+    _speechText = text;
     _characterEndTimes = speech.characterEndTimes;
     _resumeCharIndex = startIndex.clamp(0, text.length);
     _resetProgressTracking();
@@ -193,7 +221,7 @@ class TtsService {
     }
 
     _usingNativeTts = true;
-    _spokenText = text;
+    _speechText = text;
     _speakOffset = startIndex.clamp(0, text.length);
     _resumeCharIndex = _speakOffset;
     _characterEndTimes = [];
@@ -212,11 +240,12 @@ class TtsService {
   }
 
   void _onAudioPositionChanged(Duration position) {
-    if (_usingNativeTts || _characterEndTimes.isEmpty || _spokenText.isEmpty) {
+    if (_usingNativeTts || _characterEndTimes.isEmpty || _speechText.isEmpty) {
       return;
     }
 
-    final seconds = position.inMilliseconds / 1000.0;
+    final seconds =
+        (position.inMilliseconds + _audioHighlightLeadMs) / 1000.0;
     var endIndex = 0;
 
     for (var i = 0; i < _characterEndTimes.length; i++) {
@@ -227,17 +256,18 @@ class TtsService {
       }
     }
 
-    endIndex = endIndex.clamp(0, _spokenText.length);
+    endIndex = endIndex.clamp(0, _speechText.length);
     _resumeCharIndex = endIndex;
     _emitSyncedProgress(endIndex);
   }
 
-  void _emitSyncedProgress(int rawEnd) {
-    if (_spokenText.isEmpty) return;
+  void _emitSyncedProgress(int speechRawEnd) {
+    if (_displayText.isEmpty) return;
 
+    final displayEnd = _mapper?.toDisplayEnd(speechRawEnd) ?? speechRawEnd;
     final window = HighlightHelper.smooth(
-      text: _spokenText,
-      rawEnd: rawEnd,
+      text: _displayText,
+      rawEnd: displayEnd,
     );
 
     if (window.start == _lastEmittedStart && window.end == _lastEmittedEnd) {
@@ -261,16 +291,19 @@ class TtsService {
     _isPaused = false;
     _usingNativeTts = false;
     _completionSent = false;
-    _spokenText = '';
+    _displayText = text;
+    _mapper = SpeechTextMapper.fromDisplay(text);
+    _speechText = _mapper!.speechText;
     _speakOffset = 0;
-    _resumeCharIndex = startIndex.clamp(0, text.length);
+    final speechStart = _mapper!.toSpeechStart(startIndex);
+    _resumeCharIndex = speechStart;
     _characterEndTimes = [];
     _resetProgressTracking();
     _stateController.add(const TtsPlaybackEvent(TtsEventType.preparing));
 
     try {
       if (_apiKey.isNotEmpty && voiceId.isNotEmpty) {
-        await _speakWithElevenLabs(text, startIndex: startIndex);
+        await _speakWithElevenLabs(_speechText, startIndex: speechStart);
         return;
       }
     } catch (e) {
@@ -280,7 +313,7 @@ class TtsService {
     }
 
     try {
-      await _speakWithNative(text, startIndex: startIndex);
+      await _speakWithNative(_speechText, startIndex: speechStart);
     } catch (_) {
       _stateController.add(
         const TtsPlaybackEvent(
@@ -312,7 +345,7 @@ class TtsService {
   void _onPlaybackFinished() {
     if (!_usingNativeTts && !_stoppedByUser) {
       _progressController.add(
-        TtsProgressEvent(start: 0, end: _spokenText.length),
+        TtsProgressEvent(start: 0, end: _displayText.length),
       );
       _emitCompletedOnce();
     }
@@ -341,8 +374,8 @@ class TtsService {
 
     _isPaused = false;
     if (_usingNativeTts) {
-      final offset = _resumeCharIndex.clamp(0, _spokenText.length);
-      final remaining = _spokenText.substring(offset);
+      final offset = _resumeCharIndex.clamp(0, _speechText.length);
+      final remaining = _speechText.substring(offset);
       if (remaining.trim().isEmpty) {
         _emitCompletedOnce();
         return;

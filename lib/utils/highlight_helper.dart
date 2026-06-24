@@ -1,9 +1,8 @@
-/// Builds a short trailing word window that stays in sync with narration.
+/// Builds a short highlight window around the word currently being spoken.
 class HighlightHelper {
   HighlightHelper._();
 
-  /// Total words in the highlight window (current word + trailing context).
-  static const _windowWords = 3;
+  static const _forwardWords = 1;
 
   static ({int start, int end}) smooth({
     required String text,
@@ -13,15 +12,31 @@ class HighlightHelper {
       return (start: 0, end: 0);
     }
 
-    final end = rawEnd.clamp(0, text.length);
-    final wordEnd = _snapToWordEnd(text, end);
-    const lookback = _windowWords - 1;
-    final start = _expandWordsBackward(text, wordEnd, lookback);
+    final position = rawEnd.clamp(0, text.length);
+    final start = _snapToWordStart(text, position);
+    final wordEnd = _snapToWordEnd(text, position);
+    final end = _expandWordsForward(text, wordEnd, _forwardWords);
 
     return (
       start: start,
-      end: wordEnd.clamp(start, text.length),
+      end: end.clamp(start, text.length),
     );
+  }
+
+  static int _snapToWordStart(String text, int index) {
+    var i = index.clamp(0, text.length);
+
+    if (i < text.length && (text[i] == ' ' || text[i] == '\n')) {
+      while (i < text.length && (text[i] == ' ' || text[i] == '\n')) {
+        i++;
+      }
+    }
+
+    while (i > 0 && text[i - 1] != ' ' && text[i - 1] != '\n') {
+      i--;
+    }
+
+    return i;
   }
 
   static int _snapToWordEnd(String text, int index) {
@@ -32,16 +47,16 @@ class HighlightHelper {
     return i;
   }
 
-  static int _expandWordsBackward(String text, int index, int words) {
+  static int _expandWordsForward(String text, int index, int words) {
     var i = index;
     var count = 0;
 
-    while (i > 0 && count < words) {
-      while (i > 0 && text[i - 1] == ' ') {
-        i--;
+    while (i < text.length && count < words) {
+      while (i < text.length && (text[i] == ' ' || text[i] == '\n')) {
+        i++;
       }
-      while (i > 0 && text[i - 1] != ' ' && text[i - 1] != '\n') {
-        i--;
+      while (i < text.length && text[i] != ' ' && text[i] != '\n') {
+        i++;
       }
       count++;
     }
