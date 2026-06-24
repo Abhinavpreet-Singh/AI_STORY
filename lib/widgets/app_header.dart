@@ -3,32 +3,19 @@ import 'package:flutter/material.dart';
 import '../core/theme/app_theme.dart';
 
 class AppHeader extends StatelessWidget {
-  const AppHeader({super.key});
+  const AppHeader({
+    super.key,
+    this.onMenuTap,
+  });
+
+  final VoidCallback? onMenuTap;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+      padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
       child: Row(
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: AppColors.primary.withValues(alpha: 0.2),
-                width: 2,
-              ),
-            ),
-            child: const Icon(
-              Icons.auto_stories_rounded,
-              color: AppColors.primary,
-              size: 22,
-            ),
-          ),
-          const SizedBox(width: 12),
           Expanded(
             child: Text(
               'AI Story Buddy',
@@ -37,23 +24,13 @@ class AppHeader extends StatelessWidget {
                   ),
             ),
           ),
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: AppColors.accent.withValues(alpha: 0.25),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: AppColors.accent,
-                width: 2,
-              ),
+          if (onMenuTap != null)
+            IconButton(
+              onPressed: onMenuTap,
+              icon: const Icon(Icons.menu_rounded),
+              color: AppColors.primary,
+              tooltip: 'Story library',
             ),
-            child: const Icon(
-              Icons.face_rounded,
-              color: AppColors.primaryDark,
-              size: 22,
-            ),
-          ),
         ],
       ),
     );

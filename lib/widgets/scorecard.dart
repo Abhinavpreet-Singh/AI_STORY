@@ -9,12 +9,14 @@ class Scorecard extends StatelessWidget {
     required this.totalQuestions,
     required this.wrongAttempts,
     required this.onPlayAgain,
+    this.embedButton = true,
   });
 
   final int correctCount;
   final int totalQuestions;
   final int wrongAttempts;
   final VoidCallback onPlayAgain;
+  final bool embedButton;
 
   int get _stars {
     if (correctCount == totalQuestions && wrongAttempts == 0) return 3;
@@ -104,23 +106,25 @@ class Scorecard extends StatelessWidget {
               label: 'Wrong tries',
               value: '$wrongAttempts',
             ),
-            const SizedBox(height: 26),
-            SizedBox(
-              width: double.infinity,
-              height: 54,
-              child: ElevatedButton.icon(
-                onPressed: onPlayAgain,
-                icon: const Icon(Icons.replay_rounded),
-                label: const Text('Read Another Story'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.accent,
-                  foregroundColor: AppColors.primaryDark,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
+            if (embedButton) ...[
+              const SizedBox(height: 26),
+              SizedBox(
+                width: double.infinity,
+                height: 54,
+                child: ElevatedButton.icon(
+                  onPressed: onPlayAgain,
+                  icon: const Icon(Icons.replay_rounded),
+                  label: const Text('Read Another Story'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.accent,
+                    foregroundColor: AppColors.primaryDark,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
                   ),
                 ),
               ),
-            ),
+            ],
           ],
         ),
       ),

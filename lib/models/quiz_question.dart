@@ -25,24 +25,18 @@ class QuizSet {
 
   final List<QuizQuestion> questions;
 
-  factory QuizSet.fromJson(dynamic json) {
-    if (json is List) {
-      return QuizSet(
-        questions: json
-            .map((item) => QuizQuestion.fromJson(item as Map<String, dynamic>))
-            .toList(),
+  factory QuizSet.fromJson(Map<String, dynamic> json) {
+    final questions = json['questions'];
+    if (questions is! List) {
+      throw const FormatException(
+        'Each story entry in quiz.json must contain a "questions" array',
       );
     }
 
-    final map = json as Map<String, dynamic>;
-    if (map['questions'] is List) {
-      return QuizSet(
-        questions: (map['questions'] as List)
-            .map((item) => QuizQuestion.fromJson(item as Map<String, dynamic>))
-            .toList(),
-      );
-    }
-
-    return QuizSet(questions: [QuizQuestion.fromJson(map)]);
+    return QuizSet(
+      questions: questions
+          .map((item) => QuizQuestion.fromJson(item as Map<String, dynamic>))
+          .toList(),
+    );
   }
 }

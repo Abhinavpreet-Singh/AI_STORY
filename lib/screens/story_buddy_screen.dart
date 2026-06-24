@@ -3,17 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme/app_theme.dart';
 import '../models/app_state.dart';
-import '../models/quiz_question.dart';
 import '../models/story_content.dart';
 import '../providers/story_buddy_provider.dart';
 import '../widgets/app_header.dart';
 import '../widgets/buddy_character.dart';
 import '../widgets/celebration_overlay.dart';
+import '../widgets/mobile_shell.dart';
 import '../widgets/quiz_section.dart';
-import '../widgets/read_story_button.dart';
 import '../widgets/scorecard.dart';
 import '../widgets/story_card.dart';
-import '../widgets/welcome_banner.dart';
+import '../widgets/story_controls_bar.dart';
+import '../widgets/story_menu.dart';
 
 class StoryBuddyScreen extends ConsumerWidget {
   const StoryBuddyScreen({super.key});
@@ -21,7 +21,7 @@ class StoryBuddyScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(storyBuddyProvider);
-    final story = ref.watch(storyContentProvider);
+    final story = ref.watch(selectedStoryProvider);
     final quizAsync = ref.watch(quizSetProvider);
     final notifier = ref.read(storyBuddyProvider.notifier);
 
@@ -34,12 +34,14 @@ class StoryBuddyScreen extends ConsumerWidget {
       }
     });
 
-    final isSpeaking = state.ttsState == TtsState.speaking;
-    final isPreparing = state.ttsState == TtsState.preparing;
+    final narrationActive = state.ttsState == TtsState.speaking ||
+        state.ttsState == TtsState.paused ||
+        state.ttsState == TtsState.preparing;
 
     return CelebrationOverlay(
       show: state.showConfetti,
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         body: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
@@ -53,93 +55,141 @@ class StoryBuddyScreen extends ConsumerWidget {
             ),
           ),
           child: SafeArea(
-            child: quizAsync.when(
-              loading: () => const Center(
-                child: CircularProgressIndicator(color: AppColors.primary),
-              ),
-              error: (_, __) => Center(
-                child: Text(
-                  'Could not load quiz. Please restart.',
-                  style: Theme.of(context).textTheme.bodyLarge,
+            child: MobileViewport(
+              child: quizAsync.when(
+                loading: () => const Center(
+                  child: CircularProgressIndicator(color: AppColors.primary),
                 ),
-              ),
-              data: (quizSet) {
-                if (state.phase == AppPhase.scorecard) {
-                  return CustomScrollView(
-                    physics: const BouncingScrollPhysics(),
-                    slivers: [
-                      const SliverToBoxAdapter(child: AppHeader()),
-                      SliverToBoxAdapter(
-                        child: Column(
-                          children: [
-                            const SizedBox(height: 12),
-                            const BuddyCharacter(
-                              isHappy: true,
-                              isSpeaking: false,
-                            ),
-                            const SizedBox(height: 24),
-                            Scorecard(
-                              correctCount: state.correctCount,
-                              totalQuestions: quizSet.questions.length,
-                              wrongAttempts: state.wrongAttempts,
-                              onPlayAgain: notifier.playAgain,
-                            ),
-                            const SizedBox(height: 32),
-                          ],
+                error: (_, __) => const Center(
+                  child: Text('Could not load quiz. Please restart.'),
+                ),
+                data: (quizSet) {
+                  if (state.phase == AppPhase.scorecard) {
+                    return MobileStoryShell(
+                      header: AppHeader(onMenuTap: notifier.openStoryMenu),
+                      topSlot: const SizedBox(
+                        height: 96,
+                        child: Center(
+                          child: BuddyCharacter(
+                            isHappy: true,
+                            isSpeaking: false,
+                            compact: true,
+                          ),
                         ),
                       ),
-                    ],
-                  );
-                }
-
-                final currentQuestion = quizSet.questions[
-                    state.questionIndex.clamp(0, quizSet.questions.length - 1)];
-
-                return CustomScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  slivers: [
-                    const SliverToBoxAdapter(child: AppHeader()),
-                    SliverToBoxAdapter(
-                      child: AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 500),
-                        switchInCurve: Curves.easeOutCubic,
-                        switchOutCurve: Curves.easeInCubic,
-                        transitionBuilder: (child, animation) {
-                          return FadeTransition(
-                            opacity: animation,
-                            child: SlideTransition(
-                              position: Tween<Offset>(
-                                begin: const Offset(0, 0.05),
-                                end: Offset.zero,
-                              ).animate(animation),
-                              child: child,
-                            ),
-                          );
-                        },
-                        child: state.showQuiz
-                            ? _QuizPhase(
-                                key: ValueKey('quiz_${state.questionIndex}'),
-                                quiz: currentQuestion,
-                                questionIndex: state.questionIndex + 1,
-                                totalQuestions: quizSet.questions.length,
-                                state: state,
-                                onSelect: (option) =>
-                                    notifier.selectAnswer(option, quizSet),
-                              )
-                            : _StoryPhase(
-                                key: const ValueKey('story'),
-                                story: story,
-                                state: state,
-                                isSpeaking: isSpeaking,
-                                isPreparing: isPreparing,
-                                onRead: notifier.readStory,
-                                onRetry: notifier.retry,
-                              ),
+                      body: ScrollPanel(
+                        child: SingleChildScrollView(
+                          physics: const ClampingScrollPhysics(),
+                          padding: const EdgeInsets.all(12),
+                          child: Scorecard(
+                            correctCount: state.correctCount,
+                            totalQuestions: quizSet.questions.length,
+                            wrongAttempts: state.wrongAttempts,
+                            onPlayAgain: notifier.playAgain,
+                            embedButton: false,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
-                );
-              },
+                      bottomBar: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        child: SizedBox(
+                          width: double.infinity,
+                          height: 50,
+                          child: ElevatedButton.icon(
+                            onPressed: notifier.playAgain,
+                            icon: const Icon(Icons.library_books_rounded),
+                            label: const Text('Pick Another Story'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.primary,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+
+                  if (state.showQuiz) {
+                    final currentQuestion = quizSet.questions[
+                        state.questionIndex.clamp(
+                      0,
+                      quizSet.questions.length - 1,
+                    )];
+
+                    return MobileStoryShell(
+                      header: AppHeader(onMenuTap: notifier.openStoryMenu),
+                      topSlot: SizedBox(
+                        height: 96,
+                        child: Center(
+                          child: BuddyCharacter(
+                            isHappy: state.isBuddyHappy,
+                            isSpeaking: false,
+                            compact: true,
+                          ),
+                        ),
+                      ),
+                      body: ScrollPanel(
+                        child: SingleChildScrollView(
+                          physics: const ClampingScrollPhysics(),
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: QuizSection(
+                            question: currentQuestion,
+                            selectedOption: state.selectedOption,
+                            answerState: state.quizAnswerState,
+                            shakeKey: state.shakeKey,
+                            onSelect: (o) =>
+                                notifier.selectAnswer(o, quizSet),
+                            questionIndex: state.questionIndex + 1,
+                            totalQuestions: quizSet.questions.length,
+                          ),
+                        ),
+                      ),
+                    );
+                  }
+
+                  if (state.phase == AppPhase.storyMenu) {
+                    return MobileStoryShell(
+                      header: const AppHeader(),
+                      topSlot: const SizedBox(
+                        height: 96,
+                        child: Center(
+                          child: BuddyCharacter(
+                            isHappy: true,
+                            isSpeaking: false,
+                            compact: true,
+                          ),
+                        ),
+                      ),
+                      body: StoryMenu(
+                        stories: StoryCatalog.stories,
+                        readStoryIds: state.readStoryIds,
+                        selectedStoryId: state.selectedStoryId,
+                        onSelect: notifier.selectStory,
+                      ),
+                    );
+                  }
+
+                  if (story == null) {
+                    return const Center(child: Text('Pick a story to begin!'));
+                  }
+
+                  return _StoryLayout(
+                    story: story,
+                    state: state,
+                    narrationActive: narrationActive,
+                    onStart: notifier.readStory,
+                    onPause: notifier.pauseStory,
+                    onContinue: notifier.resumeStory,
+                    onRetry: notifier.retry,
+                    onContinueToQuiz: notifier.continueToQuiz,
+                    onReplayStory: notifier.replayStory,
+                    onPickAnotherStory: notifier.openStoryMenu,
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -148,94 +198,98 @@ class StoryBuddyScreen extends ConsumerWidget {
   }
 }
 
-class _StoryPhase extends StatelessWidget {
-  const _StoryPhase({
-    super.key,
+class _StoryLayout extends StatelessWidget {
+  const _StoryLayout({
     required this.story,
     required this.state,
-    required this.isSpeaking,
-    required this.isPreparing,
-    required this.onRead,
+    required this.narrationActive,
+    required this.onStart,
+    required this.onPause,
+    required this.onContinue,
     required this.onRetry,
+    required this.onContinueToQuiz,
+    required this.onReplayStory,
+    required this.onPickAnotherStory,
   });
 
   final StoryContent story;
   final StoryBuddyState state;
-  final bool isSpeaking;
-  final bool isPreparing;
-  final VoidCallback onRead;
+  final bool narrationActive;
+  final VoidCallback onStart;
+  final VoidCallback onPause;
+  final VoidCallback onContinue;
   final VoidCallback onRetry;
+  final VoidCallback onContinueToQuiz;
+  final VoidCallback onReplayStory;
+  final VoidCallback onPickAnotherStory;
 
   @override
   Widget build(BuildContext context) {
-    final showWelcome =
-        state.ttsState == TtsState.idle && state.errorMessage == null;
+    final storyFinished = state.phase == AppPhase.storyComplete;
 
-    return Column(
-      children: [
-        const SizedBox(height: 8),
-        BuddyCharacter(
-          isHappy: state.isBuddyHappy,
-          isSpeaking: isSpeaking || isPreparing,
+    return MobileStoryShell(
+      header: AppHeader(onMenuTap: onPickAnotherStory),
+      topSlot: SizedBox(
+        height: 96,
+        child: Center(
+          child: BuddyCharacter(
+            isHappy: state.isBuddyHappy || storyFinished,
+            isSpeaking: narrationActive,
+            compact: true,
+          ),
         ),
-        const SizedBox(height: 12),
-        if (showWelcome) const WelcomeBanner(),
-        StoryCard(
-          story: story,
-          isSpeaking: isSpeaking || isPreparing,
-          highlightStart: state.highlightStart,
-          highlightEnd: state.highlightEnd,
-        ),
-        const SizedBox(height: 24),
-        ReadStoryButton(
-          ttsState: state.ttsState,
-          errorMessage: state.errorMessage,
-          onPressed: onRead,
-          onRetry: onRetry,
-        ),
-        const SizedBox(height: 32),
-      ],
+      ),
+      body: StoryCard(
+        story: story,
+        isSpeaking: narrationActive,
+        highlightStart: state.highlightStart,
+        highlightEnd: state.highlightEnd,
+        topBanner: storyFinished ? const _StoryFinishedBanner() : null,
+      ),
+      bottomBar: StoryControlsBar(
+        ttsState: state.ttsState,
+        phase: state.phase,
+        errorMessage: state.errorMessage,
+        onStart: onStart,
+        onPause: onPause,
+        onContinue: onContinue,
+        onRetry: onRetry,
+        onContinueToQuiz: onContinueToQuiz,
+        onReplayStory: onReplayStory,
+        onPickAnotherStory: onPickAnotherStory,
+      ),
     );
   }
 }
 
-class _QuizPhase extends StatelessWidget {
-  const _QuizPhase({
-    super.key,
-    required this.quiz,
-    required this.questionIndex,
-    required this.totalQuestions,
-    required this.state,
-    required this.onSelect,
-  });
-
-  final QuizQuestion quiz;
-  final int questionIndex;
-  final int totalQuestions;
-  final StoryBuddyState state;
-  final ValueChanged<String> onSelect;
+class _StoryFinishedBanner extends StatelessWidget {
+  const _StoryFinishedBanner();
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const SizedBox(height: 8),
-        BuddyCharacter(
-          isHappy: state.isBuddyHappy,
-          isSpeaking: false,
-        ),
-        const SizedBox(height: 24),
-        QuizSection(
-          question: quiz,
-          selectedOption: state.selectedOption,
-          answerState: state.quizAnswerState,
-          shakeKey: state.shakeKey,
-          onSelect: onSelect,
-          questionIndex: questionIndex,
-          totalQuestions: totalQuestions,
-        ),
-        const SizedBox(height: 32),
-      ],
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.success.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.success.withValues(alpha: 0.35)),
+      ),
+      child: const Row(
+        children: [
+          Icon(Icons.check_circle_rounded, color: AppColors.success, size: 18),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Story finished! Continue to quiz below.',
+              style: TextStyle(
+                color: AppColors.primaryDark,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

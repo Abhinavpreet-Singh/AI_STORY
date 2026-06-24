@@ -9,10 +9,12 @@ class BuddyCharacter extends StatefulWidget {
     super.key,
     required this.isHappy,
     this.isSpeaking = false,
+    this.compact = false,
   });
 
   final bool isHappy;
   final bool isSpeaking;
+  final bool compact;
 
   @override
   State<BuddyCharacter> createState() => _BuddyCharacterState();
@@ -58,7 +60,7 @@ class _BuddyCharacterState extends State<BuddyCharacter>
       animation: _bounceController,
       builder: (context, child) {
         final bounce = widget.isSpeaking
-            ? math.sin(_bounceController.value * math.pi) * 4
+            ? math.sin(_bounceController.value * math.pi) * (widget.compact ? 3 : 4)
             : 0.0;
 
         return Transform.translate(
@@ -69,8 +71,8 @@ class _BuddyCharacterState extends State<BuddyCharacter>
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 400),
         curve: Curves.easeOutCubic,
-        width: 160,
-        height: 160,
+        width: widget.compact ? 110 : 160,
+        height: widget.compact ? 110 : 160,
         decoration: BoxDecoration(
           color: widget.isHappy ? AppColors.accent.withValues(alpha: 0.3) : AppColors.buddyBg,
           borderRadius: BorderRadius.circular(28),
@@ -88,7 +90,7 @@ class _BuddyCharacterState extends State<BuddyCharacter>
         ),
         child: CustomPaint(
           painter: _PipRobotPainter(isHappy: widget.isHappy),
-          size: const Size(160, 160),
+          size: Size(widget.compact ? 110 : 160, widget.compact ? 110 : 160),
         ),
       ),
     ),

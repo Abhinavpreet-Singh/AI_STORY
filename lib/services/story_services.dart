@@ -9,12 +9,19 @@ import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/quiz_question.dart';
+import '../utils/highlight_helper.dart';
 
 class QuizRepository {
-  Future<QuizSet> loadQuiz() async {
+  Future<QuizSet> loadQuizForStory(String storyId) async {
     final jsonString = await rootBundle.loadString('assets/data/quiz.json');
-    final json = jsonDecode(jsonString);
-    return QuizSet.fromJson(json);
+    final json = jsonDecode(jsonString) as Map<String, dynamic>;
+    final storyQuiz = json[storyId];
+
+    if (storyQuiz == null) {
+      throw StateError('No quiz found in quiz.json for story "$storyId"');
+    }
+
+    return QuizSet.fromJson(storyQuiz);
   }
 }
 
@@ -49,11 +56,16 @@ class TtsService {
   Stream<TtsProgressEvent> get progress => _progressController.stream;
 
   bool _stoppedByUser = false;
+  bool _isPaused = false;
   bool _nativeReady = false;
   bool _usingNativeTts = false;
   bool _completionSent = false;
   List<double> _characterEndTimes = [];
   String _spokenText = '';
+  int _resumeCharIndex = 0;
+  int _speakOffset = 0;
+  int _lastEmittedStart = -1;
+  int _lastEmittedEnd = -1;
 
   /// Uses your female voice from `.env` → `ELEVENLABS_VOICE_ID`.
   String get voiceId => dotenv.env['ELEVENLABS_VOICE_ID']?.trim() ?? '';
@@ -62,8 +74,8 @@ class TtsService {
 
   Future<void> _initNativeTts() async {
     await _nativeTts.setLanguage('en-US');
-    await _nativeTts.setSpeechRate(kIsWeb ? 0.92 : 0.48);
-    await _nativeTts.setPitch(1.08);
+    await _nativeTts.setSpeechRate(kIsWeb ? 0.72 : 0.38);
+    await _nativeTts.setPitch(1.05);
     await _nativeTts.setVolume(1.0);
 
     _nativeTts.setStartHandler(() {
@@ -80,7 +92,9 @@ class TtsService {
 
     _nativeTts.setProgressHandler((text, start, end, word) {
       if (_usingNativeTts) {
-        _progressController.add(TtsProgressEvent(start: start, end: end));
+        final absoluteEnd = (_speakOffset + end).clamp(0, _spokenText.length);
+        _resumeCharIndex = absoluteEnd;
+        _emitSyncedProgress(absoluteEnd);
       }
     });
 
@@ -118,7 +132,12 @@ class TtsService {
           },
           body: jsonEncode({
             'text': text,
-            'model_id': 'eleven_turbo_v2_5',
+            'model_id': 'eleven_multilingual_v2',
+            'voice_settings': {
+              'speed': 0.82,
+              'stability': 0.55,
+              'similarity_boost': 0.8,
+            },
           }),
         )
         .timeout(const Duration(seconds: 45));
@@ -145,6 +164,7 @@ class TtsService {
     final speech = await _fetchElevenLabsSpeech(text);
     _spokenText = text;
     _characterEndTimes = speech.characterEndTimes;
+    _resetProgressTracking();
 
     await _player.setReleaseMode(ReleaseMode.stop);
     await _player.setVolume(1.0);
@@ -161,6 +181,8 @@ class TtsService {
 
     _usingNativeTts = true;
     _spokenText = text;
+    _speakOffset = 0;
+    _resumeCharIndex = 0;
     _characterEndTimes = [];
     _stateController.add(const TtsPlaybackEvent(TtsEventType.started));
     _progressController.add(const TtsProgressEvent(start: 0, end: 0));
@@ -188,19 +210,44 @@ class TtsService {
     }
 
     endIndex = endIndex.clamp(0, _spokenText.length);
-    final startIndex = (endIndex - 24).clamp(0, endIndex);
+    _resumeCharIndex = endIndex;
+    _emitSyncedProgress(endIndex);
+  }
 
-    _progressController.add(
-      TtsProgressEvent(start: startIndex, end: endIndex),
+  void _emitSyncedProgress(int rawEnd) {
+    if (_spokenText.isEmpty) return;
+
+    final window = HighlightHelper.smooth(
+      text: _spokenText,
+      rawEnd: rawEnd,
     );
+
+    if (window.start == _lastEmittedStart && window.end == _lastEmittedEnd) {
+      return;
+    }
+
+    _lastEmittedStart = window.start;
+    _lastEmittedEnd = window.end;
+    _progressController.add(
+      TtsProgressEvent(start: window.start, end: window.end),
+    );
+  }
+
+  void _resetProgressTracking() {
+    _lastEmittedStart = -1;
+    _lastEmittedEnd = -1;
   }
 
   Future<void> speak(String text) async {
     _stoppedByUser = false;
+    _isPaused = false;
     _usingNativeTts = false;
     _completionSent = false;
     _spokenText = '';
+    _speakOffset = 0;
+    _resumeCharIndex = 0;
     _characterEndTimes = [];
+    _resetProgressTracking();
     _stateController.add(const TtsPlaybackEvent(TtsEventType.preparing));
 
     try {
@@ -242,8 +289,40 @@ class TtsService {
     _stateController.add(const TtsPlaybackEvent(TtsEventType.completed));
   }
 
+  Future<void> pause() async {
+    if (_completionSent || _isPaused) return;
+
+    _isPaused = true;
+    if (_usingNativeTts) {
+      await _nativeTts.pause();
+    } else {
+      await _player.pause();
+    }
+    _stateController.add(const TtsPlaybackEvent(TtsEventType.paused));
+  }
+
+  Future<void> resume() async {
+    if (!_isPaused) return;
+
+    _isPaused = false;
+    if (_usingNativeTts) {
+      final offset = _resumeCharIndex.clamp(0, _spokenText.length);
+      final remaining = _spokenText.substring(offset);
+      if (remaining.trim().isEmpty) {
+        _emitCompletedOnce();
+        return;
+      }
+      _speakOffset = offset;
+      await _nativeTts.speak(remaining);
+    } else {
+      await _player.resume();
+    }
+    _stateController.add(const TtsPlaybackEvent(TtsEventType.resumed));
+  }
+
   Future<void> stop() async {
     _stoppedByUser = true;
+    _isPaused = false;
     _usingNativeTts = false;
     await _player.stop();
     await _nativeTts.stop();
@@ -265,7 +344,15 @@ class _TtsConfigException implements Exception {
   final String message;
 }
 
-enum TtsEventType { preparing, started, completed, error, cancelled }
+enum TtsEventType {
+  preparing,
+  started,
+  paused,
+  resumed,
+  completed,
+  error,
+  cancelled,
+}
 
 class TtsPlaybackEvent {
   const TtsPlaybackEvent(this.type, {this.message});
