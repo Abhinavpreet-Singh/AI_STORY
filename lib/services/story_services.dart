@@ -67,6 +67,11 @@ class TtsService {
   int _lastEmittedStart = -1;
   int _lastEmittedEnd = -1;
 
+  int get resumeCharIndex => _resumeCharIndex;
+  bool get isPaused => _isPaused;
+  bool get hasActiveSession =>
+      _spokenText.isNotEmpty && !_stoppedByUser && !_completionSent;
+
   /// Uses your female voice from `.env` → `ELEVENLABS_VOICE_ID`.
   String get voiceId => dotenv.env['ELEVENLABS_VOICE_ID']?.trim() ?? '';
 
@@ -160,34 +165,47 @@ class TtsService {
     );
   }
 
-  Future<void> _speakWithElevenLabs(String text) async {
+  Future<void> _speakWithElevenLabs(String text, {int startIndex = 0}) async {
     final speech = await _fetchElevenLabsSpeech(text);
     _spokenText = text;
     _characterEndTimes = speech.characterEndTimes;
+    _resumeCharIndex = startIndex.clamp(0, text.length);
     _resetProgressTracking();
 
     await _player.setReleaseMode(ReleaseMode.stop);
     await _player.setVolume(1.0);
 
     _stateController.add(const TtsPlaybackEvent(TtsEventType.started));
-    _progressController.add(const TtsProgressEvent(start: 0, end: 0));
+    if (startIndex > 0) {
+      _emitSyncedProgress(startIndex);
+    } else {
+      _progressController.add(const TtsProgressEvent(start: 0, end: 0));
+    }
     await _player.play(BytesSource(speech.audioBytes, mimeType: 'audio/mpeg'));
+    if (startIndex > 0) {
+      await _seekToCharIndex(startIndex);
+    }
   }
 
-  Future<void> _speakWithNative(String text) async {
+  Future<void> _speakWithNative(String text, {int startIndex = 0}) async {
     if (!_nativeReady) {
       await _initNativeTts();
     }
 
     _usingNativeTts = true;
     _spokenText = text;
-    _speakOffset = 0;
-    _resumeCharIndex = 0;
+    _speakOffset = startIndex.clamp(0, text.length);
+    _resumeCharIndex = _speakOffset;
     _characterEndTimes = [];
     _stateController.add(const TtsPlaybackEvent(TtsEventType.started));
-    _progressController.add(const TtsProgressEvent(start: 0, end: 0));
+    if (startIndex > 0) {
+      _emitSyncedProgress(startIndex);
+    } else {
+      _progressController.add(const TtsProgressEvent(start: 0, end: 0));
+    }
 
-    final result = await _nativeTts.speak(text);
+    final spoken = text.substring(_speakOffset);
+    final result = await _nativeTts.speak(spoken);
     if (result != 1 && !kIsWeb) {
       throw Exception('Native TTS failed');
     }
@@ -238,21 +256,21 @@ class TtsService {
     _lastEmittedEnd = -1;
   }
 
-  Future<void> speak(String text) async {
+  Future<void> speak(String text, {int startIndex = 0}) async {
     _stoppedByUser = false;
     _isPaused = false;
     _usingNativeTts = false;
     _completionSent = false;
     _spokenText = '';
     _speakOffset = 0;
-    _resumeCharIndex = 0;
+    _resumeCharIndex = startIndex.clamp(0, text.length);
     _characterEndTimes = [];
     _resetProgressTracking();
     _stateController.add(const TtsPlaybackEvent(TtsEventType.preparing));
 
     try {
       if (_apiKey.isNotEmpty && voiceId.isNotEmpty) {
-        await _speakWithElevenLabs(text);
+        await _speakWithElevenLabs(text, startIndex: startIndex);
         return;
       }
     } catch (e) {
@@ -262,7 +280,7 @@ class TtsService {
     }
 
     try {
-      await _speakWithNative(text);
+      await _speakWithNative(text, startIndex: startIndex);
     } catch (_) {
       _stateController.add(
         const TtsPlaybackEvent(
@@ -272,6 +290,23 @@ class TtsService {
         ),
       );
     }
+  }
+
+  double _timeForCharIndex(int index) {
+    if (_characterEndTimes.isEmpty || index <= 0) return 0;
+    final i = (index - 1).clamp(0, _characterEndTimes.length - 1);
+    return _characterEndTimes[i];
+  }
+
+  Future<void> _seekToCharIndex(int charIndex) async {
+    if (charIndex <= 0) return;
+
+    final seconds = _timeForCharIndex(charIndex);
+    await _player.seek(
+      Duration(milliseconds: (seconds * 1000).round()),
+    );
+    _resumeCharIndex = charIndex;
+    _emitSyncedProgress(charIndex);
   }
 
   void _onPlaybackFinished() {

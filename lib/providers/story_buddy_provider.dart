@@ -5,11 +5,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/app_state.dart';
 import '../models/quiz_question.dart';
 import '../models/story_content.dart';
+import '../services/story_progress_repository.dart';
 import '../services/story_read_repository.dart';
 import '../services/story_services.dart';
+import '../models/saved_story_progress.dart';
 
 final quizRepositoryProvider = Provider<QuizRepository>((ref) {
   return QuizRepository();
+});
+
+final storyProgressRepositoryProvider = Provider<StoryProgressRepository>((ref) {
+  return StoryProgressRepository();
 });
 
 final storyReadRepositoryProvider = Provider<StoryReadRepository>((ref) {
@@ -38,18 +44,62 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
   StoryBuddyNotifier(
     this._ttsService,
     this._readRepository,
+    this._progressRepository,
   ) : super(const StoryBuddyState()) {
     _ttsSubscription = _ttsService.events.listen(_onTtsEvent);
     _progressSubscription = _ttsService.progress.listen(_onTtsProgress);
-    _readRepository.load().then((_) {
-      state = state.copyWith(readStoryIds: _readRepository.readIds);
-    });
+    _loadPersistedState();
   }
 
   final TtsService _ttsService;
   final StoryReadRepository _readRepository;
+  final StoryProgressRepository _progressRepository;
   late final StreamSubscription<TtsPlaybackEvent> _ttsSubscription;
   late final StreamSubscription<TtsProgressEvent> _progressSubscription;
+
+  Future<void> _loadPersistedState() async {
+    await _readRepository.load();
+    final progress = await _progressRepository.load();
+    state = state.copyWith(
+      readStoryIds: _readRepository.readIds,
+      inProgressStoryId: progress?.storyId,
+    );
+  }
+
+  Future<void> _saveCurrentProgress() async {
+    final storyId = state.selectedStoryId;
+    if (storyId == null) return;
+
+    final charIndex = _ttsService.hasActiveSession
+        ? _ttsService.resumeCharIndex
+        : state.savedCharIndex;
+
+    if (charIndex <= 0 &&
+        state.highlightEnd <= 0 &&
+        state.ttsState != TtsState.paused) {
+      return;
+    }
+
+    final progress = SavedStoryProgress(
+      storyId: storyId,
+      charIndex: charIndex > 0 ? charIndex : state.highlightEnd,
+      highlightStart: state.highlightStart,
+      highlightEnd: state.highlightEnd,
+    );
+
+    await _progressRepository.save(progress);
+    state = state.copyWith(inProgressStoryId: storyId);
+  }
+
+  Future<void> _clearProgress() async {
+    await _progressRepository.clear();
+    state = state.copyWith(
+      inProgressStoryId: null,
+      savedCharIndex: 0,
+      clearInProgressStoryId: true,
+      clearSavedCharIndex: true,
+    );
+  }
 
   StoryContent? get _currentStory {
     final id = state.selectedStoryId;
@@ -61,6 +111,7 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
     state = state.copyWith(
       highlightStart: event.start,
       highlightEnd: event.end,
+      savedCharIndex: _ttsService.resumeCharIndex,
     );
   }
 
@@ -83,6 +134,7 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
         state = state.copyWith(ttsState: TtsState.speaking);
       case TtsEventType.completed:
         if (story != null) {
+          unawaited(_clearProgress());
           _readRepository.markRead(story.id).then((_) {
             state = state.copyWith(
               readStoryIds: _readRepository.readIds,
@@ -112,7 +164,45 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
     }
   }
 
-  void selectStory(StoryContent story) {
+  Future<void> selectStory(StoryContent story) async {
+    final saved = await _progressRepository.load();
+    final canResume = saved?.storyId == story.id && saved!.charIndex > 0;
+    final isSameStory = state.selectedStoryId == story.id;
+
+    if (!isSameStory) {
+      await _ttsService.stop();
+      if (saved?.storyId != story.id) {
+        await _clearProgress();
+      }
+    }
+
+    if (canResume) {
+      state = state.copyWith(
+        selectedStoryId: story.id,
+        phase: AppPhase.story,
+        ttsState: TtsState.paused,
+        showQuiz: false,
+        errorMessage: null,
+        quizAnswerState: QuizAnswerState.idle,
+        selectedOption: null,
+        isBuddyHappy: false,
+        showConfetti: false,
+        questionIndex: 0,
+        correctCount: 0,
+        wrongAttempts: 0,
+        highlightStart: saved.highlightStart,
+        highlightEnd: saved.highlightEnd,
+        savedCharIndex: saved.charIndex,
+        inProgressStoryId: story.id,
+      );
+      return;
+    }
+
+    await _clearProgress();
+    if (!isSameStory) {
+      await _ttsService.stop();
+    }
+
     state = state.copyWith(
       selectedStoryId: story.id,
       phase: AppPhase.story,
@@ -128,14 +218,30 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
       wrongAttempts: 0,
       highlightStart: 0,
       highlightEnd: 0,
+      savedCharIndex: 0,
+      clearSavedCharIndex: true,
     );
   }
 
-  void openStoryMenu() {
+  Future<void> openStoryMenu() async {
+    final wasInStory = state.phase == AppPhase.story &&
+        (state.ttsState == TtsState.speaking ||
+            state.ttsState == TtsState.paused);
+
+    if (state.ttsState == TtsState.speaking) {
+      await _ttsService.pause();
+    } else if (state.ttsState == TtsState.preparing) {
+      await _ttsService.stop();
+    }
+
+    if (wasInStory && state.selectedStoryId != null) {
+      await _saveCurrentProgress();
+    }
+
     state = state.copyWith(
       phase: AppPhase.storyMenu,
       showQuiz: false,
-      ttsState: TtsState.idle,
+      ttsState: wasInStory ? TtsState.paused : state.ttsState,
       errorMessage: null,
     );
   }
@@ -150,7 +256,14 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
     }
 
     if (state.ttsState == TtsState.paused) {
-      await _ttsService.resume();
+      if (_ttsService.hasActiveSession && _ttsService.isPaused) {
+        await _ttsService.resume();
+      } else if (state.savedCharIndex > 0) {
+        state = state.copyWith(ttsState: TtsState.preparing, errorMessage: null);
+        await _ttsService.speak(story.text, startIndex: state.savedCharIndex);
+      } else {
+        await _ttsService.resume();
+      }
       return;
     }
 
@@ -168,6 +281,7 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
 
   Future<void> replayStory() async {
     await _ttsService.stop();
+    await _clearProgress();
     state = state.copyWith(
       ttsState: TtsState.idle,
       phase: AppPhase.story,
@@ -195,6 +309,7 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
   Future<void> pauseStory() async {
     if (state.ttsState == TtsState.speaking) {
       await _ttsService.pause();
+      await _saveCurrentProgress();
     }
   }
 
@@ -217,6 +332,7 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
 
   Future<void> playAgain() async {
     await _ttsService.stop();
+    await _clearProgress();
     state = StoryBuddyState(
       phase: AppPhase.storyMenu,
       readStoryIds: _readRepository.readIds,
@@ -310,6 +426,8 @@ class StoryBuddyState {
     this.correctCount = 0,
     this.wrongAttempts = 0,
     this.readStoryIds = const {},
+    this.inProgressStoryId,
+    this.savedCharIndex = 0,
   });
 
   final TtsState ttsState;
@@ -328,6 +446,8 @@ class StoryBuddyState {
   final int correctCount;
   final int wrongAttempts;
   final Set<String> readStoryIds;
+  final String? inProgressStoryId;
+  final int savedCharIndex;
 
   StoryBuddyState copyWith({
     TtsState? ttsState,
@@ -346,6 +466,10 @@ class StoryBuddyState {
     int? correctCount,
     int? wrongAttempts,
     Set<String>? readStoryIds,
+    String? inProgressStoryId,
+    int? savedCharIndex,
+    bool clearInProgressStoryId = false,
+    bool clearSavedCharIndex = false,
   }) {
     return StoryBuddyState(
       ttsState: ttsState ?? this.ttsState,
@@ -364,6 +488,11 @@ class StoryBuddyState {
       correctCount: correctCount ?? this.correctCount,
       wrongAttempts: wrongAttempts ?? this.wrongAttempts,
       readStoryIds: readStoryIds ?? this.readStoryIds,
+      inProgressStoryId: clearInProgressStoryId
+          ? null
+          : (inProgressStoryId ?? this.inProgressStoryId),
+      savedCharIndex:
+          clearSavedCharIndex ? 0 : (savedCharIndex ?? this.savedCharIndex),
     );
   }
 }
@@ -372,7 +501,8 @@ final storyBuddyProvider =
     StateNotifierProvider<StoryBuddyNotifier, StoryBuddyState>((ref) {
   final tts = ref.watch(ttsServiceProvider);
   final readRepo = ref.watch(storyReadRepositoryProvider);
-  return StoryBuddyNotifier(tts, readRepo);
+  final progressRepo = ref.watch(storyProgressRepositoryProvider);
+  return StoryBuddyNotifier(tts, readRepo, progressRepo);
 });
 
 final selectedStoryProvider = Provider<StoryContent?>((ref) {

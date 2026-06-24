@@ -9,12 +9,14 @@ class StoryMenu extends StatelessWidget {
     required this.stories,
     required this.readStoryIds,
     required this.selectedStoryId,
+    required this.inProgressStoryId,
     required this.onSelect,
   });
 
   final List<StoryContent> stories;
   final Set<String> readStoryIds;
   final String? selectedStoryId;
+  final String? inProgressStoryId;
   final ValueChanged<StoryContent> onSelect;
 
   @override
@@ -27,6 +29,7 @@ class StoryMenu extends StatelessWidget {
         final story = stories[index];
         final isRead = readStoryIds.contains(story.id);
         final isSelected = selectedStoryId == story.id;
+        final isInProgress = inProgressStoryId == story.id;
 
         return Material(
           color: Colors.transparent,
@@ -84,7 +87,20 @@ class StoryMenu extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  if (isRead)
+                  if (isInProgress)
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.pause_circle_outline_rounded,
+                        color: AppColors.primary,
+                        size: 18,
+                      ),
+                    )
+                  else if (isRead)
                     Container(
                       padding: const EdgeInsets.all(6),
                       decoration: BoxDecoration(

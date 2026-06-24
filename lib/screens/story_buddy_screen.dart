@@ -167,6 +167,7 @@ class StoryBuddyScreen extends ConsumerWidget {
                         stories: StoryCatalog.stories,
                         readStoryIds: state.readStoryIds,
                         selectedStoryId: state.selectedStoryId,
+                        inProgressStoryId: state.inProgressStoryId,
                         onSelect: notifier.selectStory,
                       ),
                     );
