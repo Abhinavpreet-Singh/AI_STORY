@@ -1,0 +1,19 @@
+{
+  "questions": [
+    {
+      "question": "What colour was Pip the Robot's lost gear?",
+      "options": ["Red", "Green", "Blue", "Yellow"],
+      "answer": "Blue"
+    },
+    {
+      "question": "Where did Pip lose his gear?",
+      "options": ["The Whispering Woods", "The Rusty Desert", "The Cloud City", "The Deep Ocean", "The Candy Castle"],
+      "answer": "The Whispering Woods"
+    },
+    {
+      "question": "How did Pip feel while searching?",
+      "options": ["Afraid", "Curious", "Angry"],
+      "answer": "Curious"
+    }
+  ]
+}
