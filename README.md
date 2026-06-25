@@ -1,253 +1,133 @@
 # AI Story Buddy
 
-A kid-friendly Flutter app that reads illustrated stories aloud with synced word highlighting, then runs a per-story quiz with haptics, confetti, and a scorecard.
-
-![Flutter](https://img.shields.io/badge/Flutter-3.2+-02569B?logo=flutter)
-![Riverpod](https://img.shields.io/badge/State-Riverpod-6F2BC2)
-![Platform](https://img.shields.io/badge/Platform-Android%20%7C%20iOS%20%7C%20Web-FFBB00)
-
----
-
-## Features
-
-| Area | What it does |
-|------|----------------|
-| **Story library** | 3 stories; checkmark on stories read before |
-| **Narration** | ElevenLabs TTS (mobile) with `flutter_tts` fallback (web / offline) |
-| **Highlighting** | Current word + next word highlighted in sync with audio |
-| **Pause / resume** | Pause mid-story; open menu saves progress to device |
-| **Quiz** | 5 questions per story, loaded from JSON |
-| **Feedback** | Shake + haptics on wrong answer; confetti on correct |
-| **Scorecard** | Stars, correct/wrong counts at the end |
-
----
-
-## Tech Stack
-
-| Layer | Choice | Why |
-|-------|--------|-----|
-| UI | **Flutter** | One codebase → Android, iOS, Web, desktop |
-| State | **Riverpod** | TTS streams, quiz flow, and UI stay decoupled |
-| TTS (primary) | **ElevenLabs API** | Natural voice + character timestamps for highlighting |
-| TTS (fallback) | **flutter_tts** | Device engine when API unavailable (e.g. web CORS) |
-| Playback | **audioplayers** | Streams ElevenLabs MP3 bytes in memory |
-| Persistence | **shared_preferences** | Read stories + in-progress narration |
-| Config | **flutter_dotenv** | API keys in `.env` (not committed) |
-| Quiz data | **Bundled JSON** | `assets/data/quiz.json` — no backend required |
-
----
-
-## App Flow
-
-```
-Story Menu → Pick story → Read aloud (highlighted) → Story Complete
-    → Continue to Quiz (5 Qs) → Scorecard → Pick Another Story
-```
-
-**Phases** (`AppPhase`): `storyMenu` → `story` → `storyComplete` → `quiz` → `scorecard`
-
-**TTS states** (`TtsState`): `idle` → `preparing` → `speaking` ↔ `paused` → `completed` / `error`
-
-Opening the **menu** during narration pauses audio and saves character position + highlight so the child can resume later.
-
----
-
-## TTS & Audio (how it works)
-
-### Hybrid engine
-
-```
-speak(story.text)
-    │
-    ├─ ELEVENLABS_API_KEY + VOICE_ID set?
-    │       YES → POST /v1/text-to-speech/{voice}/with-timestamps
-    │             → base64 MP3 + character_end_times_seconds
-    │             → audioplayers plays BytesSource (no temp file)
-    │             → onPositionChanged drives highlight index
-    │
-    └─ NO / API fails → flutter_tts (device TTS)
-                        → setProgressHandler drives highlight index
-```
-
-### Speech text vs display text
-
-Stories keep punctuation on screen (`His gear!`) but TTS receives a cleaned version — `!`, `?`, quotes stripped via `SpeechTextMapper` so the voice does not read “exclamation mark”.
-
-Highlight indices always map back to the **display** text the child sees.
-
-### Highlight sync
-
-1. Raw character index from audio position (ElevenLabs) or TTS progress (native)
-2. Small **160 ms lead** on ElevenLabs to offset player latency
-3. `HighlightHelper` snaps to the **current word + 1 word ahead**
-4. `StoryCard` dims read text, highlights the active phrase, auto-scrolls
-
-### Pause / resume
-
-| Engine | Pause | Resume |
-|--------|-------|--------|
-| ElevenLabs | `audioplayers.pause()` | `audioplayers.resume()` |
-| Native TTS | `flutter_tts.pause()` | Re-speaks from saved character offset |
-
-Progress is persisted in `StoryProgressRepository` (story id, char index, highlight range).
-
----
-
-## Data
-
-### Stories — `lib/models/story_content.dart`
-
-Hardcoded catalog (`pip_woods`, `luna_cloud`, `finn_tide`). Each has `id`, `title`, `subtitle`, `emoji`, `text`.
-
-### Quizzes — `assets/data/quiz.json`
-
-Keyed by story id; **5 questions** each:
-
-```json
-{
-  "pip_woods": {
-    "questions": [
-      {
-        "question": "What colour was Pip's lost gear?",
-        "options": ["Red", "Green", "Blue", "Yellow"],
-        "answer": "Blue"
-      }
-    ]
-  }
-}
-```
-
-`QuizRepository.loadQuizForStory(storyId)` loads at runtime. `quizSetProvider` reloads when the selected story changes.
-
-### Read / in-progress — `shared_preferences`
-
-| Key | Stores |
-|-----|--------|
-| `read_story_ids` | Stories finished at least once |
-| `story_progress` | Paused narration (story id, char index, highlight) |
-
----
-
-## Project Structure
-
-```
-lib/
-├── main.dart                         # dotenv load, ProviderScope, theme
-├── core/theme/                       # Brand colors, typography
-├── models/
-│   ├── app_state.dart                # TtsState, AppPhase, QuizAnswerState
-│   ├── story_content.dart            # StoryCatalog (3 stories)
-│   ├── quiz_question.dart            # QuizQuestion, QuizSet
-│   └── saved_story_progress.dart
-├── providers/
-│   └── story_buddy_provider.dart     # StoryBuddyNotifier — main state machine
-├── services/
-│   ├── story_services.dart           # TtsService, QuizRepository
-│   ├── story_read_repository.dart
-│   └── story_progress_repository.dart
-├── screens/
-│   └── story_buddy_screen.dart       # Phase routing + MobileStoryShell
-├── utils/
-│   ├── highlight_helper.dart         # Word-window highlight math
-│   └── speech_text_mapper.dart       # Display ↔ speech text mapping
-└── widgets/
-    ├── story_menu.dart               # Story picker
-    ├── story_card.dart               # Scrollable text + highlighting
-    ├── story_controls_bar.dart       # Read / Pause / Continue / Quiz
-    ├── quiz_section.dart             # Questions + shake animation
-    ├── scorecard.dart
-    ├── buddy_character.dart          # Animated mascot (CustomPaint)
-    ├── mobile_shell.dart             # Fixed phone viewport layout
-    └── celebration_overlay.dart      # Confetti wrapper
-```
-
----
-
-## Setup
-
-### Prerequisites
-
-- Flutter SDK 3.2+
-- Android Studio / Xcode (for emulators)
-- [ElevenLabs](https://elevenlabs.io) account (optional but recommended for mobile)
-
-### Environment
-
-Copy `.env.example` → `.env` at project root:
-
-```env
-ELEVENLABS_API_KEY=your_api_key_here
-ELEVENLABS_VOICE_ID=your_female_voice_id_here
-```
-
-Without these keys the app falls back to device TTS.
-
-### Run
+Kid-friendly Flutter app: pick a story, hear it read aloud with synced highlighting, answer a quiz, see a scorecard.
 
 ```bash
 flutter pub get
-flutter run                  # default device
-flutter run -d chrome        # web (device TTS — ElevenLabs blocked by CORS)
-flutter run -d emulator-5554 # Android emulator
-```
-
-### Test
-
-```bash
-flutter analyze
-flutter test
+cp .env.example .env   # add ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID
+flutter run
 ```
 
 ---
 
-## Architecture (state)
+## Framework choice
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  StoryBuddyScreen (ConsumerWidget)                      │
-│    watches storyBuddyProvider + quizSetProvider         │
-└────────────────────────┬────────────────────────────────┘
-                         │
-┌────────────────────────▼────────────────────────────────┐
-│  StoryBuddyNotifier (StateNotifier)                     │
-│    phase, ttsState, highlights, quiz index, scores      │
-│    listens → TtsService.events + .progress              │
-└────────────┬───────────────────────────┬────────────────┘
-             │                           │
-┌────────────▼──────────┐    ┌───────────▼────────────────┐
-│  TtsService           │    │  Repositories              │
-│  ElevenLabs / native  │    │  Quiz, Read, Progress      │
-│  audioplayers         │    │  (shared_preferences)      │
-└───────────────────────┘    └────────────────────────────┘
-```
+**Flutter** — single codebase for Android (primary), iOS, and web; smooth animations; hot reload for UI polish.
 
-All narration side-effects flow through **streams** into the notifier — the UI never polls TTS directly.
+**Riverpod** — TTS runs on async streams (`events`, `progress`). Riverpod keeps narration, quiz, and UI decoupled so the whole screen does not rebuild on every highlight tick.
 
 ---
 
-## Key Dependencies
+## Audio end → quiz transition
 
-```yaml
-flutter_riverpod   # State management
-flutter_dotenv     # .env secrets
-flutter_tts        # Device TTS fallback
-http               # ElevenLabs API
-audioplayers       # MP3 playback + position events
-confetti           # Correct-answer celebration
-shared_preferences # Read stories + resume progress
+No timers. The handoff is **event-driven**:
+
+1. `TtsService` emits `TtsEventType.completed` when playback finishes (ElevenLabs `onPlayerComplete` or `flutter_tts` completion handler).
+2. `StoryBuddyNotifier._onTtsEvent` sets `ttsState = completed`, `phase = storyComplete`, `showQuiz = false`.
+3. UI shows a **Story finished** banner and buttons: **Continue to Quiz**, **Replay**, **More Stories**.
+4. User taps **Continue to Quiz** → `continueToQuiz()` sets `phase = quiz`, `showQuiz = true`, resets question index.
+
+The quiz never auto-appears; the child chooses when to move on. Phase changes are explicit (`AppPhase` enum), not inferred from widgets.
+
+---
+
+## Data-driven quiz
+
+Quiz lives in `assets/data/quiz.json`, keyed by story id. Each story has **5 questions**; option count varies (3–5).
+
+```json
+"pip_woods": {
+  "questions": [
+    { "question": "...", "options": ["Red", "Green", "Blue", "Yellow"], "answer": "Blue" },
+    { "question": "...", "options": ["Afraid", "Curious", "Angry"], "answer": "Curious" }
+  ]
+}
 ```
 
----
+- `QuizRepository.loadQuizForStory(storyId)` parses JSON at runtime.
+- `QuizQuestion.fromJson` accepts any `options` array length.
+- `QuizSection` builds choices with `List.generate(question.options.length, …)` — no hardcoded option count.
+- `quizSetProvider` reloads when `selectedStoryId` changes.
 
-## Design Notes
-
-- **Mobile-first layout** — `MobileViewport` (430 px) with pinned controls; story scrolls inside the card only
-- **CustomPaint buddy** — lightweight mascot, no Lottie/Rive asset cost
-- **No root setState** — single notifier owns the state machine; widgets rebuild via `ref.watch`
-- **Offline quiz** — JSON bundled; swapping `QuizRepository` to HTTP needs no UI changes
+Swap the repository to HTTP later; models and UI stay the same.
 
 ---
 
-## License
+## Caching
 
-Private / educational project — not published to pub.dev.
+| Asset | Approach |
+|-------|----------|
+| **Quiz JSON** | Bundled in assets; loaded once per story via `FutureProvider` (in-memory for app lifetime). |
+| **ElevenLabs audio** | Fetched per narration; played from in-memory `BytesSource` (no disk write). Re-fetch on resume if session was lost. |
+| **Read / progress** | `shared_preferences` — which stories are done, paused narration position. |
+
+**Remote audio (if added):** cache MP3 by `storyId` + text hash in app documents (`path_provider`). Check `If-None-Match` / ETag on refetch. On miss or offline, use cached file or fall back to `flutter_tts`.
+
+---
+
+## Audio loading & failure states
+
+| `TtsState` | What happens | UI |
+|------------|--------------|-----|
+| `idle` | Ready | “Read Me a Story” |
+| `preparing` | ElevenLabs HTTP or TTS init | Spinner — “Preparing story…” |
+| `speaking` | Audio playing | “Pause”; buddy animates |
+| `paused` | Playback frozen; progress saved | “Continue Story” |
+| `completed` | Story done | Story-complete actions |
+| `error` | API/TTS failure | Red banner + “Try Again” |
+
+**Engine:** ElevenLabs with-timestamps API when `.env` keys exist; otherwise `flutter_tts` (required on web — CORS blocks ElevenLabs).
+
+**Errors:** `setErrorHandler`, HTTP failures, and `speak()` try/catch all emit `TtsEventType.error` with a friendly message. User can always retry; app does not hang.
+
+---
+
+## Performance profiling
+
+**Tool:** Flutter DevTools → Performance tab, `flutter run --profile` on a mid-range Android emulator (~3 GB RAM).
+
+**Measured:** frame build time (idle story screen), frame time during confetti/shake, rebuild scope on TTS progress events.
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Rebuilds per highlight tick | Full screen (`setState` on root) | Notifier listeners + targeted widgets |
+| Buddy repaint | Whole layout | `RepaintBoundary` around `CustomPaint` mascot |
+| Confetti cost | Higher particle count | Capped burst; overlay isolated |
+
+**Changes:** migrated root `setState` → `StoryBuddyNotifier`; `RepaintBoundary` on buddy; confetti tuned; no `google_fonts` network fetch (system fonts); highlight updates via stream, not rebuild loops.
+
+> **Screenshot:** Run profile mode, interact with quiz + confetti, capture the Performance timeline in DevTools and attach as `docs/frame_timing.png` for submission.
+
+---
+
+## Mid-range Android optimizations
+
+- **7 dependencies** — no Lottie/Rive; buddy is `CustomPaint`.
+- **No mandatory network** — quiz is bundled; TTS falls back to device engine.
+- **Fixed viewport** (`MobileStoryShell`) — one scroll region, pinned controls; less layout work.
+- **Android audio context** — `audioplayers` uses `speech`/`media` usage for clearer speaker output.
+- **Const widgets** where static (header, labels).
+
+---
+
+## AI usage & judgment
+
+| Area | AI help | Human call |
+|------|---------|------------|
+| Scaffolding, TTS wiring, highlight sync | Yes | Reviewed and iterated on lag/sync |
+| Rive/Lottie mascot | Suggested | **Rejected** — extra MB + decode cost; kept `CustomPaint` buddy |
+| Auto-advance to quiz on TTS end | Suggested | **Changed** — `storyComplete` + explicit “Continue to Quiz” for kid pacing |
+| `vibration` plugin | Used initially | **Removed** — compileSdk issues; replaced with `HapticFeedback` |
+| ElevenLabs only | Considered | **Hybrid** — ElevenLabs on mobile for quality + timestamps; `flutter_tts` fallback for web/offline |
+
+**What failed:** Highlighting lagged behind voice when using trailing word windows + throttled progress. **Fix:** current-word window, 160 ms audio lead, `SpeechTextMapper` so display text and TTS timestamps stay aligned. **Also:** `vibration` broke Android build — swapped to built-in haptics.
+
+---
+
+## Structure (quick)
+
+```
+lib/providers/story_buddy_provider.dart   # State machine
+lib/services/story_services.dart          # TtsService + QuizRepository
+assets/data/quiz.json                     # Per-story questions
+```
