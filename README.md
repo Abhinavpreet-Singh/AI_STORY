@@ -2,14 +2,6 @@
 
 Kid-friendly Flutter app: pick a story, hear it read aloud with synced highlighting, answer a quiz, see a scorecard.
 
-```bash
-flutter pub get
-cp .env.example .env   # add ELEVENLABS_API_KEY + ELEVENLABS_VOICE_ID
-flutter run
-```
-
----
-
 ## Framework choice
 
 **Flutter** — single codebase for Android (primary), iOS, and web; smooth animations; hot reload for UI polish.
@@ -131,3 +123,74 @@ lib/providers/story_buddy_provider.dart   # State machine
 lib/services/story_services.dart          # TtsService + QuizRepository
 assets/data/quiz.json                     # Per-story questions
 ```
+
+## Getting started
+
+### Prerequisites
+
+- Flutter SDK installed and available in your terminal (`flutter --version`)
+- Android Studio or VS Code/Cursor Flutter tooling
+- An Android emulator, connected Android device, or browser target
+- Optional: ElevenLabs API key and voice ID for higher-quality narration
+
+### Install and run
+
+```bash
+# 1. Check Flutter setup
+flutter doctor
+
+# 2. Install dependencies
+flutter pub get
+
+# 3. Create local environment file
+# Windows PowerShell:
+Copy-Item .env.example .env
+
+# macOS/Linux/Git Bash:
+cp .env.example .env
+
+# 4. Add ElevenLabs values in .env
+# ELEVENLABS_API_KEY=your_api_key_here
+# ELEVENLABS_VOICE_ID=your_voice_id_here
+
+# 5. Run the app
+flutter run
+```
+
+If ElevenLabs values are not configured, the app falls back to the device/browser TTS engine.
+
+### Useful commands
+
+```bash
+# List available devices
+flutter devices
+
+# Run on a specific device
+flutter run -d <device-id>
+
+# Run on Chrome/web
+flutter run -d chrome
+
+# Run tests
+flutter test
+
+# Static analysis / lint checks
+flutter analyze
+
+# Format Dart code
+dart format .
+
+# Build Android APK
+flutter build apk
+
+# Build web output
+flutter build web
+
+# Clean generated build files
+flutter clean
+
+# Reinstall dependencies after cleaning
+flutter pub get
+```
+
+---
