@@ -56,13 +56,17 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
   final StoryProgressRepository _progressRepository;
   late final StreamSubscription<TtsPlaybackEvent> _ttsSubscription;
   late final StreamSubscription<TtsProgressEvent> _progressSubscription;
+  DateTime? _lastHighlightUiUpdate;
 
   Future<void> _loadPersistedState() async {
     await _readRepository.load();
-    final progress = await _progressRepository.load();
-    state = state.copyWith(
+    await _progressRepository.clear();
+
+    state = const StoryBuddyState(
+      phase: AppPhase.storyMenu,
+      isReady: true,
+    ).copyWith(
       readStoryIds: _readRepository.readIds,
-      inProgressStoryId: progress?.storyId,
     );
   }
 
@@ -108,6 +112,14 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
   }
 
   void _onTtsProgress(TtsProgressEvent event) {
+    final now = DateTime.now();
+    if (_lastHighlightUiUpdate != null &&
+        now.difference(_lastHighlightUiUpdate!) <
+            const Duration(milliseconds: 150)) {
+      return;
+    }
+    _lastHighlightUiUpdate = now;
+
     state = state.copyWith(
       highlightStart: event.start,
       highlightEnd: event.end,
@@ -335,6 +347,7 @@ class StoryBuddyNotifier extends StateNotifier<StoryBuddyState> {
     await _clearProgress();
     state = StoryBuddyState(
       phase: AppPhase.storyMenu,
+      isReady: true,
       readStoryIds: _readRepository.readIds,
     );
   }
@@ -428,6 +441,7 @@ class StoryBuddyState {
     this.readStoryIds = const {},
     this.inProgressStoryId,
     this.savedCharIndex = 0,
+    this.isReady = false,
   });
 
   final TtsState ttsState;
@@ -448,6 +462,7 @@ class StoryBuddyState {
   final Set<String> readStoryIds;
   final String? inProgressStoryId;
   final int savedCharIndex;
+  final bool isReady;
 
   StoryBuddyState copyWith({
     TtsState? ttsState,
@@ -470,6 +485,7 @@ class StoryBuddyState {
     int? savedCharIndex,
     bool clearInProgressStoryId = false,
     bool clearSavedCharIndex = false,
+    bool? isReady,
   }) {
     return StoryBuddyState(
       ttsState: ttsState ?? this.ttsState,
@@ -493,6 +509,7 @@ class StoryBuddyState {
           : (inProgressStoryId ?? this.inProgressStoryId),
       savedCharIndex:
           clearSavedCharIndex ? 0 : (savedCharIndex ?? this.savedCharIndex),
+      isReady: isReady ?? this.isReady,
     );
   }
 }

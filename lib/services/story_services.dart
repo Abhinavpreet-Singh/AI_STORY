@@ -70,6 +70,8 @@ class TtsService {
   int _speakOffset = 0;
   int _lastEmittedStart = -1;
   int _lastEmittedEnd = -1;
+  DateTime? _lastProgressEmit;
+  bool _playbackFinishedHandled = false;
 
   /// Display-text position for saving resume points in the UI.
   int get resumeCharIndex =>
@@ -79,13 +81,15 @@ class TtsService {
   bool get hasActiveSession =>
       _speechText.isNotEmpty && !_stoppedByUser && !_completionSent;
 
-  static const _audioHighlightLeadMs = 160;
+  static const _audioHighlightLeadMs = 80;
+  static const _progressThrottleMs = 120;
 
   Future<void> _configurePlayer() async {
+    await _player.setPlayerMode(PlayerMode.mediaPlayer);
     await _player.setAudioContext(
       AudioContext(
         android: AudioContextAndroid(
-          isSpeakerphoneOn: true,
+          isSpeakerphoneOn: false,
           stayAwake: true,
           contentType: AndroidContentType.speech,
           usageType: AndroidUsageType.media,
@@ -165,10 +169,11 @@ class TtsService {
           },
           body: jsonEncode({
             'text': text,
-            'model_id': 'eleven_multilingual_v2',
+            'model_id': 'eleven_turbo_v2_5',
+            'output_format': 'mp3_44100_128',
             'voice_settings': {
-              'speed': 0.82,
-              'stability': 0.55,
+              'speed': 0.9,
+              'stability': 0.65,
               'similarity_boost': 0.8,
             },
           }),
@@ -201,7 +206,9 @@ class TtsService {
     _resetProgressTracking();
 
     await _player.setReleaseMode(ReleaseMode.stop);
+    await _player.setPlayerMode(PlayerMode.mediaPlayer);
     await _player.setVolume(1.0);
+    _playbackFinishedHandled = false;
 
     _stateController.add(const TtsPlaybackEvent(TtsEventType.started));
     if (startIndex > 0) {
@@ -274,8 +281,16 @@ class TtsService {
       return;
     }
 
+    final now = DateTime.now();
+    if (_lastProgressEmit != null &&
+        now.difference(_lastProgressEmit!) <
+            Duration(milliseconds: _progressThrottleMs)) {
+      return;
+    }
+
     _lastEmittedStart = window.start;
     _lastEmittedEnd = window.end;
+    _lastProgressEmit = now;
     _progressController.add(
       TtsProgressEvent(start: window.start, end: window.end),
     );
@@ -284,6 +299,7 @@ class TtsService {
   void _resetProgressTracking() {
     _lastEmittedStart = -1;
     _lastEmittedEnd = -1;
+    _lastProgressEmit = null;
   }
 
   Future<void> speak(String text, {int startIndex = 0}) async {
@@ -291,6 +307,7 @@ class TtsService {
     _isPaused = false;
     _usingNativeTts = false;
     _completionSent = false;
+    _playbackFinishedHandled = false;
     _displayText = text;
     _mapper = SpeechTextMapper.fromDisplay(text);
     _speechText = _mapper!.speechText;
@@ -343,12 +360,14 @@ class TtsService {
   }
 
   void _onPlaybackFinished() {
-    if (!_usingNativeTts && !_stoppedByUser) {
-      _progressController.add(
-        TtsProgressEvent(start: 0, end: _displayText.length),
-      );
-      _emitCompletedOnce();
+    if (_playbackFinishedHandled || _usingNativeTts || _stoppedByUser) {
+      return;
     }
+    _playbackFinishedHandled = true;
+    _progressController.add(
+      TtsProgressEvent(start: 0, end: _displayText.length),
+    );
+    _emitCompletedOnce();
   }
 
   void _emitCompletedOnce() {

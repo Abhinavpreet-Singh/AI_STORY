@@ -25,7 +25,7 @@ void main() {
     );
 
     await tester.pump();
-    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.text('AI Story Buddy'), findsOneWidget);
     expect(find.text('Pip and the Whispering Woods'), findsOneWidget);

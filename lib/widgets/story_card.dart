@@ -26,6 +26,7 @@ class StoryCard extends StatefulWidget {
 class _StoryCardState extends State<StoryCard> {
   final _scrollController = ScrollController();
   int _lastScrollStart = -1;
+  DateTime? _lastScrollAt;
 
   @override
   void didUpdateWidget(StoryCard oldWidget) {
@@ -39,7 +40,15 @@ class _StoryCardState extends State<StoryCard> {
 
   void _autoScrollToHighlight() {
     if (_lastScrollStart == widget.highlightStart) return;
+
+    final now = DateTime.now();
+    if (_lastScrollAt != null &&
+        now.difference(_lastScrollAt!) < const Duration(milliseconds: 450)) {
+      return;
+    }
+
     _lastScrollStart = widget.highlightStart;
+    _lastScrollAt = now;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
@@ -72,11 +81,7 @@ class _StoryCardState extends State<StoryCard> {
         _scrollController.position.maxScrollExtent,
       );
 
-      _scrollController.animateTo(
-        target,
-        duration: const Duration(milliseconds: 520),
-        curve: Curves.easeInOutCubic,
-      );
+      _scrollController.jumpTo(target);
     });
   }
 
